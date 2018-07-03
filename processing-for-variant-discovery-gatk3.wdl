@@ -31,203 +31,6 @@
 ## page at https://hub.docker.com/r/broadinstitute/genomes-in-the-cloud/ for detailed
 ## licensing information pertaining to the included programs.
 
-# WORKFLOW DEFINITION 
-workflow GenericPreProcessingWorkflow {
-
-  String sample_name
-  String base_file_name
-  Array[File] flowcell_unmapped_bams
-  String unmapped_bam_suffix
-  
-  File ref_fasta
-  File ref_fasta_index
-  File ref_dict
-  File ref_alt
-  File ref_bwt
-  File ref_sa
-  File ref_amb
-  File ref_ann
-  File ref_pac
-  
-  File dbSNP_vcf
-  File dbSNP_vcf_index
-  Array[File] known_indels_sites_VCFs
-  Array[File] known_indels_sites_indices
-  
-  Int flowcell_small_disk
-  Int flowcell_medium_disk
-  Int agg_small_disk
-  Int agg_medium_disk
-  Int agg_large_disk
-
-  String? gitc_docker
-  String gitc_image = select_first([gitc_docker, "broadinstitute/genomes-in-the-cloud:2.3.1-1512499786"])
-
-  String bwa_commandline="bwa mem -K 100000000 -p -v 3 -t 16 -Y $bash_ref_fasta"
-
-  String recalibrated_bam_basename = base_file_name + ".aligned.duplicates_marked.recalibrated"
-
-  # Get the version of BWA to include in the PG record in the header of the BAM produced 
-  # by MergeBamAlignment. 
-  call GetBwaVersion {
-    input: 
-      docker = gitc_image
-  }
-
-  # Align flowcell-level unmapped input bams in parallel
-  scatter (unmapped_bam in flowcell_unmapped_bams) {
-  
-    # Because of a wdl/cromwell bug this is not currently valid so we have to sub(sub()) in each task
-    # String base_name = sub(sub(unmapped_bam, "gs://.*/", ""), unmapped_bam_suffix + "$", "")
-
-    String sub_strip_path = "gs://.*/"
-    String sub_strip_unmapped = unmapped_bam_suffix + "$"
-
-    # Map reads to reference
-    call SamToFastqAndBwaMem {
-      input:
-        input_bam = unmapped_bam,
-        bwa_commandline = bwa_commandline,
-        output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".unmerged",
-        ref_fasta = ref_fasta,
-        ref_fasta_index = ref_fasta_index,
-        ref_dict = ref_dict,
-        ref_alt = ref_alt,
-        ref_bwt = ref_bwt,
-        ref_amb = ref_amb,
-        ref_ann = ref_ann,
-        ref_pac = ref_pac,
-        ref_sa = ref_sa,
-        disk_size = flowcell_medium_disk,
-        docker = gitc_image
-     }
-
-    # Merge original uBAM and BWA-aligned BAM 
-    call MergeBamAlignment {
-      input:
-        unmapped_bam = unmapped_bam,
-        bwa_commandline = bwa_commandline,
-        bwa_version = GetBwaVersion.version,
-        aligned_bam = SamToFastqAndBwaMem.output_bam,
-        output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".aligned.unsorted",
-        ref_fasta = ref_fasta,
-        ref_fasta_index = ref_fasta_index,
-        ref_dict = ref_dict,
-        disk_size = flowcell_medium_disk,
-        docker = gitc_image
-    }
-
-    # Sort and fix tags in the merged BAM
-    call SortAndFixTags as SortAndFixReadGroupBam {
-      input:
-      input_bam = MergeBamAlignment.output_bam,
-      output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".sorted",
-      ref_dict = ref_dict,
-      ref_fasta = ref_fasta,
-      ref_fasta_index = ref_fasta_index,
-      disk_size = flowcell_medium_disk,
-      docker = gitc_image
-    }
-
-  }
-
-  # Aggregate aligned+merged flowcell BAM files and mark duplicates
-  # We take advantage of the tool's ability to take multiple BAM inputs and write out a single output
-  # to avoid having to spend time just merging BAM files.
-  call MarkDuplicates {
-    input:
-      input_bams = MergeBamAlignment.output_bam,
-      output_bam_basename = base_file_name + ".aligned.unsorted.duplicates_marked",
-      metrics_filename = base_file_name + ".duplicate_metrics",
-      disk_size = agg_large_disk,
-      docker = gitc_image
-  }
-
-  # Sort aggregated+deduped BAM file and fix tags
-  call SortAndFixTags as SortAndFixSampleBam {
-    input:
-      input_bam = MarkDuplicates.output_bam,
-      output_bam_basename = base_file_name + ".aligned.duplicate_marked.sorted",
-      ref_dict = ref_dict,
-      ref_fasta = ref_fasta,
-      ref_fasta_index = ref_fasta_index,
-      disk_size = agg_large_disk,
-      docker = gitc_image
-  }
-
-  # Create list of sequences for scatter-gather parallelization 
-  call CreateSequenceGroupingTSV {
-    input:
-      ref_dict = ref_dict
-  }
-  
-  # Perform Base Quality Score Recalibration (BQSR) on the sorted BAM in parallel
-  scatter (subgroup in CreateSequenceGroupingTSV.sequence_grouping) {
-    # Generate the recalibration model by interval
-    call BaseRecalibrator {
-      input:
-        input_bam = SortAndFixSampleBam.output_bam,
-        input_bam_index = SortAndFixSampleBam.output_bam_index,
-        recalibration_report_filename = base_file_name + ".recal_data.csv",
-        sequence_group_interval = subgroup,
-        dbSNP_vcf = dbSNP_vcf,
-        dbSNP_vcf_index = dbSNP_vcf_index,
-        known_indels_sites_VCFs = known_indels_sites_VCFs,
-        known_indels_sites_indices = known_indels_sites_indices,
-        ref_dict = ref_dict,
-        ref_fasta = ref_fasta,
-        ref_fasta_index = ref_fasta_index,
-        disk_size = agg_small_disk,
-        docker = gitc_image
-    }  
-  }  
-  
-  # Merge the recalibration reports resulting from by-interval recalibration
-  call GatherBqsrReports {
-    input:
-      input_bqsr_reports = BaseRecalibrator.recalibration_report,
-      output_report_filename = base_file_name + ".recal_data.csv",
-      disk_size = flowcell_small_disk,
-      docker = gitc_image
-  }
-
-  scatter (subgroup in CreateSequenceGroupingTSV.sequence_grouping_with_unmapped) {
-
-    # Apply the recalibration model by interval
-    call ApplyBQSR {
-      input:
-        input_bam = SortAndFixSampleBam.output_bam,
-        input_bam_index = SortAndFixSampleBam.output_bam_index,
-        output_bam_basename = recalibrated_bam_basename,
-        recalibration_report = GatherBqsrReports.output_bqsr_report,
-        sequence_group_interval = subgroup,
-        ref_dict = ref_dict,
-        ref_fasta = ref_fasta,
-        ref_fasta_index = ref_fasta_index,
-        disk_size = agg_small_disk,
-        docker = gitc_image
-    }
-  } 
-
-  # Merge the recalibrated BAM files resulting from by-interval recalibration
-  call GatherBamFiles {
-    input:
-      input_bams = ApplyBQSR.recalibrated_bam,
-      output_bam_basename = base_file_name,
-      disk_size = agg_large_disk,
-      docker = gitc_image
-  }
-
-  # Outputs that will be retained when execution is complete  
-  output {
-    File duplication_metrics = MarkDuplicates.duplicate_metrics
-    File bqsr_report = GatherBqsrReports.output_bqsr_report
-    File analysis_ready_bam = GatherBamFiles.output_bam
-    File analysis_ready_bam_index = GatherBamFiles.output_bam_index
-    File analysis_ready_bam_md5 = GatherBamFiles.output_bam_md5
-  } 
-}
-
 # TASK DEFINITIONS
 
 # Get version of BWA
@@ -608,5 +411,202 @@ task GatherBamFiles {
     File output_bam_index = "${output_bam_basename}.bai"
     File output_bam_md5 = "${output_bam_basename}.bam.md5"
   }
+}
+
+# WORKFLOW DEFINITION 
+workflow GenericPreProcessingWorkflow {
+
+  String sample_name
+  String base_file_name
+  Array[File] flowcell_unmapped_bams
+  String unmapped_bam_suffix
+  
+  File ref_fasta
+  File ref_fasta_index
+  File ref_dict
+  File ref_alt
+  File ref_bwt
+  File ref_sa
+  File ref_amb
+  File ref_ann
+  File ref_pac
+  
+  File dbSNP_vcf
+  File dbSNP_vcf_index
+  Array[File] known_indels_sites_VCFs
+  Array[File] known_indels_sites_indices
+  
+  Int flowcell_small_disk
+  Int flowcell_medium_disk
+  Int agg_small_disk
+  Int agg_medium_disk
+  Int agg_large_disk
+
+  String? gitc_docker
+  String gitc_image = select_first([gitc_docker, "broadinstitute/genomes-in-the-cloud:2.3.1-1512499786"])
+
+  String bwa_commandline="bwa mem -K 100000000 -p -v 3 -t 16 -Y $bash_ref_fasta"
+
+  String recalibrated_bam_basename = base_file_name + ".aligned.duplicates_marked.recalibrated"
+
+  # Get the version of BWA to include in the PG record in the header of the BAM produced 
+  # by MergeBamAlignment. 
+  call GetBwaVersion {
+    input: 
+      docker = gitc_image
+  }
+
+  # Align flowcell-level unmapped input bams in parallel
+  scatter (unmapped_bam in flowcell_unmapped_bams) {
+  
+    # Because of a wdl/cromwell bug this is not currently valid so we have to sub(sub()) in each task
+    # String base_name = sub(sub(unmapped_bam, "gs://.*/", ""), unmapped_bam_suffix + "$", "")
+
+    String sub_strip_path = "gs://.*/"
+    String sub_strip_unmapped = unmapped_bam_suffix + "$"
+
+    # Map reads to reference
+    call SamToFastqAndBwaMem {
+      input:
+        input_bam = unmapped_bam,
+        bwa_commandline = bwa_commandline,
+        output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".unmerged",
+        ref_fasta = ref_fasta,
+        ref_fasta_index = ref_fasta_index,
+        ref_dict = ref_dict,
+        ref_alt = ref_alt,
+        ref_bwt = ref_bwt,
+        ref_amb = ref_amb,
+        ref_ann = ref_ann,
+        ref_pac = ref_pac,
+        ref_sa = ref_sa,
+        disk_size = flowcell_medium_disk,
+        docker = gitc_image
+     }
+
+    # Merge original uBAM and BWA-aligned BAM 
+    call MergeBamAlignment {
+      input:
+        unmapped_bam = unmapped_bam,
+        bwa_commandline = bwa_commandline,
+        bwa_version = GetBwaVersion.version,
+        aligned_bam = SamToFastqAndBwaMem.output_bam,
+        output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".aligned.unsorted",
+        ref_fasta = ref_fasta,
+        ref_fasta_index = ref_fasta_index,
+        ref_dict = ref_dict,
+        disk_size = flowcell_medium_disk,
+        docker = gitc_image
+    }
+
+    # Sort and fix tags in the merged BAM
+    call SortAndFixTags as SortAndFixReadGroupBam {
+      input:
+      input_bam = MergeBamAlignment.output_bam,
+      output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".sorted",
+      ref_dict = ref_dict,
+      ref_fasta = ref_fasta,
+      ref_fasta_index = ref_fasta_index,
+      disk_size = flowcell_medium_disk,
+      docker = gitc_image
+    }
+
+  }
+
+  # Aggregate aligned+merged flowcell BAM files and mark duplicates
+  # We take advantage of the tool's ability to take multiple BAM inputs and write out a single output
+  # to avoid having to spend time just merging BAM files.
+  call MarkDuplicates {
+    input:
+      input_bams = MergeBamAlignment.output_bam,
+      output_bam_basename = base_file_name + ".aligned.unsorted.duplicates_marked",
+      metrics_filename = base_file_name + ".duplicate_metrics",
+      disk_size = agg_large_disk,
+      docker = gitc_image
+  }
+
+  # Sort aggregated+deduped BAM file and fix tags
+  call SortAndFixTags as SortAndFixSampleBam {
+    input:
+      input_bam = MarkDuplicates.output_bam,
+      output_bam_basename = base_file_name + ".aligned.duplicate_marked.sorted",
+      ref_dict = ref_dict,
+      ref_fasta = ref_fasta,
+      ref_fasta_index = ref_fasta_index,
+      disk_size = agg_large_disk,
+      docker = gitc_image
+  }
+
+  # Create list of sequences for scatter-gather parallelization 
+  call CreateSequenceGroupingTSV {
+    input:
+      ref_dict = ref_dict
+  }
+  
+  # Perform Base Quality Score Recalibration (BQSR) on the sorted BAM in parallel
+  scatter (subgroup in CreateSequenceGroupingTSV.sequence_grouping) {
+    # Generate the recalibration model by interval
+    call BaseRecalibrator {
+      input:
+        input_bam = SortAndFixSampleBam.output_bam,
+        input_bam_index = SortAndFixSampleBam.output_bam_index,
+        recalibration_report_filename = base_file_name + ".recal_data.csv",
+        sequence_group_interval = subgroup,
+        dbSNP_vcf = dbSNP_vcf,
+        dbSNP_vcf_index = dbSNP_vcf_index,
+        known_indels_sites_VCFs = known_indels_sites_VCFs,
+        known_indels_sites_indices = known_indels_sites_indices,
+        ref_dict = ref_dict,
+        ref_fasta = ref_fasta,
+        ref_fasta_index = ref_fasta_index,
+        disk_size = agg_small_disk,
+        docker = gitc_image
+    }  
+  }  
+  
+  # Merge the recalibration reports resulting from by-interval recalibration
+  call GatherBqsrReports {
+    input:
+      input_bqsr_reports = BaseRecalibrator.recalibration_report,
+      output_report_filename = base_file_name + ".recal_data.csv",
+      disk_size = flowcell_small_disk,
+      docker = gitc_image
+  }
+
+  scatter (subgroup in CreateSequenceGroupingTSV.sequence_grouping_with_unmapped) {
+
+    # Apply the recalibration model by interval
+    call ApplyBQSR {
+      input:
+        input_bam = SortAndFixSampleBam.output_bam,
+        input_bam_index = SortAndFixSampleBam.output_bam_index,
+        output_bam_basename = recalibrated_bam_basename,
+        recalibration_report = GatherBqsrReports.output_bqsr_report,
+        sequence_group_interval = subgroup,
+        ref_dict = ref_dict,
+        ref_fasta = ref_fasta,
+        ref_fasta_index = ref_fasta_index,
+        disk_size = agg_small_disk,
+        docker = gitc_image
+    }
+  } 
+
+  # Merge the recalibrated BAM files resulting from by-interval recalibration
+  call GatherBamFiles {
+    input:
+      input_bams = ApplyBQSR.recalibrated_bam,
+      output_bam_basename = base_file_name,
+      disk_size = agg_large_disk,
+      docker = gitc_image
+  }
+
+  # Outputs that will be retained when execution is complete  
+  output {
+    File duplication_metrics = MarkDuplicates.duplicate_metrics
+    File bqsr_report = GatherBqsrReports.output_bqsr_report
+    File analysis_ready_bam = GatherBamFiles.output_bam
+    File analysis_ready_bam_index = GatherBamFiles.output_bam_index
+    File analysis_ready_bam_md5 = GatherBamFiles.output_bam_md5
+  } 
 }
 
