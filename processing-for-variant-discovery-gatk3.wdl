@@ -316,16 +316,16 @@ task MergeBamAlignment {
 
   command {
     # set the bash variable needed for the command-line
-    bash_ref_fasta=${ref_fasta}
+    bash_ref_fasta="${ref_fasta}"
     java -Xmx2500m -jar /usr/gitc/picard.jar \
       MergeBamAlignment \
       VALIDATION_STRINGENCY=SILENT \
       EXPECTED_ORIENTATIONS=FR \
       ATTRIBUTES_TO_RETAIN=X0 \
-      ALIGNED_BAM=${aligned_bam} \
-      UNMAPPED_BAM=${unmapped_bam} \
-      OUTPUT=${output_bam_basename}.bam \
-      REFERENCE_SEQUENCE=${ref_fasta} \
+      ALIGNED_BAM="${aligned_bam}" \
+      UNMAPPED_BAM="${unmapped_bam}" \
+      OUTPUT="${output_bam_basename}.bam" \
+      REFERENCE_SEQUENCE="${ref_fasta}" \
       PAIRED_RUN=true \
       SORT_ORDER="unsorted" \
       IS_BISULFITE_SEQUENCE=false \
@@ -369,7 +369,7 @@ task SortAndFixTags {
 
     java -Xmx4000m -jar /usr/gitc/picard.jar \
     SortSam \
-    INPUT=${input_bam} \
+    INPUT="${input_bam}" \
     OUTPUT=/dev/stdout \
     SORT_ORDER="coordinate" \
     CREATE_INDEX=false \
@@ -377,10 +377,10 @@ task SortAndFixTags {
     java -Xmx500m -jar /usr/gitc/picard.jar \
     SetNmAndUqTags \
     INPUT=/dev/stdin \
-    OUTPUT=${output_bam_basename}.bam \
+    OUTPUT="${output_bam_basename}.bam" \
     CREATE_INDEX=true \
     CREATE_MD5_FILE=true \
-    REFERENCE_SEQUENCE=${ref_fasta}
+    REFERENCE_SEQUENCE="${ref_fasta}"
   }
   runtime {
     docker: docker
@@ -410,8 +410,8 @@ task MarkDuplicates {
     java -Xmx4000m -jar /usr/gitc/picard.jar \
       MarkDuplicates \
       INPUT=${sep=' INPUT=' input_bams} \
-      OUTPUT=${output_bam_basename}.bam \
-      METRICS_FILE=${metrics_filename} \
+      OUTPUT="${output_bam_basename}.bam" \
+      METRICS_FILE="${metrics_filename}" \
       VALIDATION_STRINGENCY=SILENT \
       OPTICAL_DUPLICATE_PIXEL_DISTANCE=2500 \
       ASSUME_SORT_ORDER="queryname"
@@ -502,11 +502,11 @@ task BaseRecalibrator {
     java -Xmx4000m \
       -jar /usr/gitc/GATK35.jar \
       -T BaseRecalibrator \
-      -R ${ref_fasta} \
-      -I ${input_bam} \
+      -R "${ref_fasta}" \
+      -I "${input_bam}" \
       --useOriginalQualities \
-      -o ${recalibration_report_filename} \
-      -knownSites ${dbSNP_vcf} \
+      -o "${recalibration_report_filename}" \
+      -knownSites "${dbSNP_vcf}" \
       -knownSites ${sep=" -knownSites " known_indels_sites_VCFs} \
       -L ${sep=" -L " sequence_group_interval}
   }
@@ -533,7 +533,7 @@ task GatherBqsrReports {
     java -Xmx3000m \
       -cp /usr/gitc/GATK35.jar org.broadinstitute.gatk.tools.GatherBqsrReports \
       I= ${sep=' I= ' input_bqsr_reports} \
-      O= ${output_report_filename}
+      O= "${output_report_filename}"
     }
   runtime {
     docker: docker
@@ -563,11 +563,11 @@ task ApplyBQSR {
     java -Xmx3000m \
       -jar /usr/gitc/GATK35.jar \
       -T PrintReads \
-      -R ${ref_fasta} \
-      -I ${input_bam} \
+      -R "${ref_fasta}" \
+      -I "${input_bam}" \
       --useOriginalQualities \
-      -o ${output_bam_basename}.bam \
-      -BQSR ${recalibration_report} \
+      -o "${output_bam_basename}.bam" \
+      -BQSR "${recalibration_report}" \
       -SQQ 10 -SQQ 20 -SQQ 30 \
       -L ${sep=" -L " sequence_group_interval}
   }
@@ -593,7 +593,7 @@ task GatherBamFiles {
     java -Xmx2000m -jar /usr/gitc/picard.jar \
       GatherBamFiles \
       INPUT=${sep=' INPUT=' input_bams} \
-      OUTPUT=${output_bam_basename}.bam \
+      OUTPUT="${output_bam_basename}.bam" \
       CREATE_INDEX=true \
       CREATE_MD5_FILE=true
     }
