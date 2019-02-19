@@ -76,7 +76,6 @@ workflow GenericPreProcessingWorkflow {
   # Align flowcell-level unmapped input bams in parallel
   scatter (unmapped_bam in flowcell_unmapped_bams) {
   
-    # Because of a wdl/cromwell bug this is not currently valid so we have to sub(sub()) in each task
     String base_name = sub(basename(unmapped_bam), unmapped_bam_suffix + "$", "") + ".unmerged"
 
     # Map reads to reference
