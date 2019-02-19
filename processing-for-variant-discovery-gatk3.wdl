@@ -79,7 +79,6 @@ workflow GenericPreProcessingWorkflow {
     # Because of a wdl/cromwell bug this is not currently valid so we have to sub(sub()) in each task
     # String base_name = sub(sub(unmapped_bam, "gs://.*/", ""), unmapped_bam_suffix + "$", "")
 
-    String sub_strip_path = "gs://.*/"
     String sub_strip_unmapped = unmapped_bam_suffix + "$"
 
     # Map reads to reference
@@ -87,7 +86,7 @@ workflow GenericPreProcessingWorkflow {
       input:
         input_bam = unmapped_bam,
         bwa_commandline = bwa_commandline,
-        output_bam_basename = sub(sub(unmapped_bam, sub_strip_path, ""), sub_strip_unmapped, "") + ".unmerged",
+        output_bam_basename = sub(basename(unmapped_bam), sub_strip_unmapped, "") + ".unmerged",
         ref_fasta = ref_fasta,
         ref_fasta_index = ref_fasta_index,
         ref_dict = ref_dict,
