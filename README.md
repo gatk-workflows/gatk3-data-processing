@@ -1,4 +1,7 @@
 # gatk3-data-processing
+
+**GATK3 and this workflow is now longer supported, this repo is intended for legacy purposes.**
+
 ### Purpose :
 Workflows for processing high-throughput sequencing data for variant discovery with GATK3 and related tools
 
